@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Messages — GameBarterHub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Exo+2:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/navbar.css">
+  <link rel="stylesheet" href="css/notification.css">
+  <link rel="stylesheet" href="css/forms.css">
+  <link rel="stylesheet" href="css/messages.css">
+  <style>
+    .chat-msg .chat-bubble { word-break:break-word;white-space:pre-wrap; }
+    .chat-msg.sent .chat-bubble {
+      background:linear-gradient(135deg,rgba(0,229,255,0.2),rgba(0,180,200,0.15));
+      border:1px solid rgba(0,229,255,0.35);color:var(--text-primary);
+    }
+    .msg-date-divider {
+      text-align:center;font-size:0.7rem;color:var(--text-muted);margin:8px 0;
+      position:relative;
+    }
+    .msg-date-divider::before,.msg-date-divider::after {
+      content:'';position:absolute;top:50%;width:35%;height:1px;background:var(--border);
+    }
+    .msg-date-divider::before{left:0;}.msg-date-divider::after{right:0;}
+    .msg-read-receipt{font-size:0.65rem;color:var(--accent-cyan);text-align:right;margin-top:2px;opacity:0.7;}
+    .emoji-btn{background:none;border:none;font-size:1.3rem;cursor:pointer;padding:4px 6px;border-radius:8px;transition:background 0.2s;color:var(--text-muted);flex-shrink:0;align-self:center;}
+    .emoji-btn:hover{background:rgba(0,229,255,0.1);}
+    .emoji-picker{position:absolute;bottom:70px;left:20px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:12px;display:none;flex-wrap:wrap;gap:6px;max-width:280px;z-index:100;box-shadow:0 8px 32px rgba(0,0,0,0.4);}
+    .emoji-picker.open{display:flex;}
+    .emoji-picker span{font-size:1.4rem;cursor:pointer;padding:4px;border-radius:6px;}
+    .emoji-picker span:hover{background:rgba(0,229,255,0.1);}
+    .chat-input-area{position:relative;}
+    .online-dot{width:8px;height:8px;border-radius:50%;background:var(--accent-green);display:inline-block;margin-right:4px;animation:pulse 2s infinite;}
+    @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
+    .msg-contact-unread .msg-contact-name{color:var(--text-primary);font-weight:700;}
+    .msg-contact-unread .msg-contact-preview{color:var(--text-secondary);font-weight:500;}
+    @media(max-width:768px){
+      .messages-layout{grid-template-columns:1fr;height:calc(100vh - 64px);}
+      .msg-sidebar{display:flex;}
+      .chat-area{display:none;height:calc(100vh - 64px);}
+      .chat-area.mobile-open{display:flex;position:fixed;inset:0;top:64px;z-index:50;}
+      .msg-sidebar.mobile-hidden{display:none;}
+      .chat-back-btn{display:inline-flex !important;}
+    }
+    .chat-back-btn{display:none;}
+  </style>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script>
+    const firebaseConfig={apiKey:"AIzaSyD5-g1bjXfgd1w9boHbfLX8EMnt6tr9yuM",authDomain:"gbhub-25a16.firebaseapp.com",projectId:"gbhub-25a16",storageBucket:"gbhub-25a16.firebasestorage.app",messagingSenderId:"1031854442872",appId:"1:1031854442872:web:208bc4663cace89f43608d",measurementId:"G-XV7WMV0Q82"};
+    if(!firebase.apps.length){firebase.initializeApp(firebaseConfig);}
+  </script>
+</head>
+<body>
+
+<div class="messages-layout" id="messagesLayout">
+  <div class="msg-sidebar" id="msgSidebar">
+    <div class="msg-sidebar-header">
+      💬 Messages
+      <span id="totalUnreadBadge" style="display:none;background:#ff3b3b;color:#fff;font-size:0.65rem;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:8px;vertical-align:middle"></span>
+    </div>
+    <div class="msg-search">
+      <input class="form-input" placeholder="Search conversations..." style="border-radius:20px;font-size:0.82rem;padding:8px 14px" oninput="filterContacts(this.value)" id="contactSearch">
+    </div>
+    <div class="msg-list" id="msgList">
+      <div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>
+    </div>
+  </div>
+
+  <div class="chat-area" id="chatArea">
+    <div class="chat-empty">
+      <div class="chat-empty-icon">💬</div>
+      <p>Select a conversation to start chatting</p>
+    </div>
+  </div>
+</div>
+
+<script src="js/data.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/navbar.js"></script>
+<script src="js/notification.js"></script>
+<script src="js/navbar-template.js"></script>
+<script>
+let currentConvoId=null, _msgsUnsubscribe=null, _convosUnsubscribe=null;
+let _allConvos=[], _searchQ='';
+
+function escHtml(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+async function initMessages(){
+  await restoreSession();
+  if(!state.currentUser){window.location.href='login.html';return;}
+  startConvosListener();
+  const openConvoId=sessionStorage.getItem('gbh_openConvo');
+  if(openConvoId){sessionStorage.removeItem('gbh_openConvo');setTimeout(()=>openChat(openConvoId),600);}
+}
+
+function startConvosListener(){
+  if(_convosUnsubscribe)_convosUnsubscribe();
+  const db=firebase.firestore(),uid=state.currentUser.uid;
+  _convosUnsubscribe=db.collection('conversations')
+    .where('userIds','array-contains',uid)
+    .orderBy('lastAt','desc')
+    .onSnapshot(snap=>{
+      _allConvos=snap.docs.map(d=>{
+        const data=d.data(),users=data.users||{};
+        const partId=(data.userIds||[]).find(id=>id!==uid);
+        const partner=users[partId]||{name:'Unknown',avatar:null};
+        return{id:d.id,partner:{...partner,uid:partId},lastMsg:data.lastMessage||'',lastAt:data.lastAt?data.lastAt.toDate().toISOString():null,unread:(data.unread||{})[uid]||0};
+      });
+      renderContactList();updateTotalUnread();
+    },()=>{});
+}
+
+function renderContactList(){
+  const q=_searchQ.toLowerCase();
+  const filtered=q?_allConvos.filter(c=>c.partner.name.toLowerCase().includes(q)):_allConvos;
+  if(!filtered.length){
+    document.getElementById('msgList').innerHTML=`<div class="empty-state" style="padding:40px"><div class="empty-state-icon">💬</div><p>No conversations yet.<br>Click "Contact" on any trade post to start chatting.</p></div>`;
+    return;
+  }
+  document.getElementById('msgList').innerHTML=filtered.map(c=>`
+    <div class="msg-contact ${currentConvoId===c.id?'active':''} ${c.unread>0?'msg-contact-unread':''}" onclick="openChat('${c.id}')">
+      <div style="width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,var(--accent-cyan),var(--accent-purple));display:flex;align-items:center;justify-content:center;font-size:0.9rem;font-weight:700;color:#0a0e1a;overflow:hidden;flex-shrink:0;">
+        ${c.partner.avatar?`<img src="${escHtml(c.partner.avatar)}" style="width:100%;height:100%;object-fit:cover" alt="">`:escHtml((c.partner.name||'?')[0]).toUpperCase()}
+      </div>
+      <div class="msg-contact-info">
+        <div class="msg-contact-name">${escHtml(c.partner.name)}</div>
+        <div class="msg-contact-preview">${escHtml(c.lastMsg||'No messages yet')}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
+        <span class="msg-contact-time">${c.lastAt?formatTime(c.lastAt):''}</span>
+        ${c.unread>0?`<span class="msg-unread" style="position:static;width:18px;height:18px">${c.unread>9?'9+':c.unread}</span>`:''}
+      </div>
+    </div>`).join('');
+}
+
+function filterContacts(q){_searchQ=q;renderContactList();}
+
+function updateTotalUnread(){
+  const total=_allConvos.reduce((s,c)=>s+(c.unread||0),0);
+  const badge=document.getElementById('totalUnreadBadge');
+  if(!badge)return;
+  if(total>0){badge.textContent=total>99?'99+':total;badge.style.display='inline';}
+  else{badge.style.display='none';}
+}
+
+async function openChat(convoId){
+  currentConvoId=convoId;
+  if(_msgsUnsubscribe){_msgsUnsubscribe();_msgsUnsubscribe=null;}
+  renderContactList();
+  const convo=_allConvos.find(c=>c.id===convoId);
+  if(!convo)return;
+  const p=convo.partner;
+  if(window.innerWidth<=768){
+    document.getElementById('msgSidebar').classList.add('mobile-hidden');
+    document.getElementById('chatArea').classList.add('mobile-open');
+  }
+  document.getElementById('chatArea').innerHTML=`
+    <div class="chat-header">
+      <button class="chat-back-btn btn btn-ghost" style="padding:6px 10px;font-size:0.8rem;margin-right:4px" onclick="closeMobileChat()">← Back</button>
+      <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--accent-cyan),var(--accent-purple));display:flex;align-items:center;justify-content:center;font-size:0.85rem;font-weight:700;color:#0a0e1a;overflow:hidden;flex-shrink:0">
+        ${p.avatar?`<img src="${escHtml(p.avatar)}" style="width:100%;height:100%;object-fit:cover" alt="">`:escHtml((p.name||'?')[0]).toUpperCase()}
+      </div>
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:0.9rem">${escHtml(p.name)}</div>
+        <div style="font-size:0.72rem;color:var(--accent-green)"><span class="online-dot"></span>Active</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-left:auto">
+        <button onclick="startVoiceCall('${escHtml(p.name)}')" title="Voice Call" style="width:38px;height:38px;border-radius:50%;border:1px solid rgba(0,229,255,0.35);background:rgba(0,229,255,0.08);color:var(--accent-cyan);cursor:pointer;font-size:1.1rem;display:flex;align-items:center;justify-content:center;">📞</button>
+        <button onclick="startVideoCall('${escHtml(p.name)}')" title="Video Call" style="width:38px;height:38px;border-radius:50%;border:1px solid rgba(57,255,20,0.35);background:rgba(57,255,20,0.08);color:var(--accent-green);cursor:pointer;font-size:1.1rem;display:flex;align-items:center;justify-content:center;">📹</button>
+      </div>
+    </div>
+    <div class="chat-messages" id="chatMsgs">
+      <div style="text-align:center;padding:40px;color:var(--text-muted)">Loading messages...</div>
+    </div>
+    <div class="chat-input-area">
+      <div id="emojiPicker" class="emoji-picker">
+        ${['😀','😂','🥰','😎','🤔','👍','👎','🔥','💯','🎮','⚔️','🏆','💎','🚀','😭','😡','🤣','❤️','✨','🎉'].map(e=>`<span onclick="insertEmoji('${e}')">${e}</span>`).join('')}
+      </div>
+      <button class="emoji-btn" onclick="toggleEmojiPicker(event)" title="Emoji">😊</button>
+      <textarea class="chat-input" id="chatInputEl" placeholder="Type a message..." rows="1"
+        onkeydown="handleMsgKey(event)" oninput="autoResizeInput(this)"></textarea>
+      <button class="chat-send" onclick="sendMsg()" title="Send">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>`;
+  markConvoRead(convoId);
+  startMsgsListener(convoId);
+}
+
+function startMsgsListener(convoId){
+  const db=firebase.firestore(),uid=state.currentUser.uid;
+  _msgsUnsubscribe=db.collection('conversations').doc(convoId)
+    .collection('messages').orderBy('createdAt','asc')
+    .onSnapshot(snap=>{
+      const msgs=snap.docs.map(d=>({
+        id:d.id,body:d.data().body,sender_id:d.data().sender_id,
+        senderName:d.data().senderName,senderAvatar:d.data().senderAvatar,
+        is_read:d.data().is_read,
+        created_at:d.data().createdAt?d.data().createdAt.toDate().toISOString():new Date().toISOString(),
+      }));
+      renderMessages(msgs);
+      const unread=snap.docs.filter(d=>d.data().sender_id!==uid&&!d.data().is_read);
+      if(unread.length>0){
+        const batch=db.batch();
+        unread.forEach(d=>batch.update(d.ref,{is_read:true}));
+        batch.commit().catch(()=>{});
+        markConvoRead(convoId);
+      }
+    },()=>{});
+}
+
+function renderMessages(msgs){
+  const el=document.getElementById('chatMsgs');
+  if(!el)return;
+  const uid=state.currentUser.uid;
+  const wasAtBottom=el.scrollHeight-el.scrollTop-el.clientHeight<80;
+  let html='',lastDateStr='';
+  msgs.forEach((m,i)=>{
+    const isMine=m.sender_id===uid;
+    const dateStr=new Date(m.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    if(dateStr!==lastDateStr){html+=`<div class="msg-date-divider">${dateStr}</div>`;lastDateStr=dateStr;}
+    const isLastSent=isMine&&!msgs.slice(i+1).some(x=>x.sender_id===uid);
+    const readReceipt=isLastSent&&m.is_read?`<div class="msg-read-receipt">✓✓ Seen</div>`:isLastSent?`<div class="msg-read-receipt" style="opacity:0.4">✓ Sent</div>`:'';
+    const avatarHtml=m.senderAvatar?`<img src="${escHtml(m.senderAvatar)}" style="width:100%;height:100%;object-fit:cover" alt="">`:escHtml((m.senderName||'?')[0]).toUpperCase();
+    html+=`<div class="chat-msg ${isMine?'sent':'received'}">
+      ${!isMine?`<div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--accent-cyan),var(--accent-purple));display:flex;align-items:center;justify-content:center;font-size:0.65rem;font-weight:700;color:#0a0e1a;overflow:hidden;flex-shrink:0;align-self:flex-end">${avatarHtml}</div>`:''}
+      <div><div class="chat-bubble">${escHtml(m.body)}</div><div class="chat-msg-time">${formatTime(m.created_at)}</div>${readReceipt}</div>
+    </div>`;
+  });
+  if(!msgs.length)html=`<div style="text-align:center;padding:60px 20px;color:var(--text-muted)"><div style="font-size:2.5rem;margin-bottom:12px">👋</div><p style="font-size:0.88rem">Start the conversation!</p></div>`;
+  el.innerHTML=html;
+  if(wasAtBottom||msgs.length<=1)el.scrollTop=el.scrollHeight;
+}
+
+async function sendMsg(){
+  const inputEl=document.getElementById('chatInputEl');
+  const text=inputEl?.value.trim();
+  if(!text||!currentConvoId)return;
+  inputEl.value='';inputEl.style.height='auto';
+  try{await apiPost('/messages/'+currentConvoId,{body:text});}
+  catch(e){showToast(e.message||'Could not send message.','error');inputEl.value=text;}
+}
+
+async function markConvoRead(convoId){
+  const db=firebase.firestore(),uid=state.currentUser.uid;
+  await db.collection('conversations').doc(convoId).update({['unread.'+uid]:0}).catch(()=>{});
+  const c=_allConvos.find(x=>x.id===convoId);if(c)c.unread=0;
+  updateTotalUnread();renderContactList();
+}
+
+function handleMsgKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}}
+function autoResizeInput(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,120)+'px';}
+function toggleEmojiPicker(e){e.stopPropagation();document.getElementById('emojiPicker').classList.toggle('open');}
+document.addEventListener('click',()=>document.getElementById('emojiPicker')?.classList.remove('open'));
+function insertEmoji(emoji){const inp=document.getElementById('chatInputEl');if(!inp)return;const pos=inp.selectionStart||inp.value.length;inp.value=inp.value.slice(0,pos)+emoji+inp.value.slice(pos);inp.focus();inp.setSelectionRange(pos+emoji.length,pos+emoji.length);document.getElementById('emojiPicker').classList.remove('open');}
+
+function closeMobileChat(){
+  if(_msgsUnsubscribe){_msgsUnsubscribe();_msgsUnsubscribe=null;}
+  currentConvoId=null;
+  document.getElementById('msgSidebar').classList.remove('mobile-hidden');
+  document.getElementById('chatArea').classList.remove('mobile-open');
+  document.getElementById('chatArea').innerHTML=`<div class="chat-empty"><div class="chat-empty-icon">💬</div><p>Select a conversation to start chatting</p></div>`;
+  renderContactList();
+}
+
+function startVoiceCall(name){showCallModal(name,false);}
+function startVideoCall(name){showCallModal(name,true);}
+function showCallModal(contact,isVideo){
+  const existing=document.getElementById('callModal');if(existing)existing.remove();
+  const modal=document.createElement('div');modal.id='callModal';
+  modal.style.cssText='position:fixed;inset:0;background:rgba(5,5,20,0.92);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center;z-index:9999;';
+  const callType=isVideo?'Video Call':'Voice Call',callIcon=isVideo?'📹':'📞',init=(contact[0]||'?').toUpperCase();
+  modal.innerHTML=`<div style="background:linear-gradient(135deg,#0d1117,#0a1628);border:1px solid rgba(0,229,255,0.2);border-radius:24px;padding:48px 40px;text-align:center;min-width:280px;max-width:340px;width:90%;box-shadow:0 0 60px rgba(0,229,255,0.1);">
+    <div style="width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,rgba(0,229,255,0.2),rgba(57,255,20,0.1));border:2px solid rgba(0,229,255,0.4);display:flex;align-items:center;justify-content:center;font-size:2rem;font-weight:700;color:var(--accent-cyan);margin:0 auto 16px;">${init}</div>
+    <div style="font-family:'Rajdhani',sans-serif;font-size:1.5rem;font-weight:700;margin-bottom:4px;color:#fff">${escHtml(contact)}</div>
+    <div style="font-size:0.82rem;color:var(--accent-cyan);margin-bottom:8px">${callIcon} ${callType}</div>
+    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:32px" id="callStatus">Calling...</div>
+    <button onclick="endCall()" style="width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#ff3b3b,#cc0000);border:none;color:#fff;font-size:1.6rem;cursor:pointer;">📵</button>
+  </div>`;
+  document.body.appendChild(modal);
+  setTimeout(()=>{const s=document.getElementById('callStatus');if(s)s.textContent='Ringing...';},800);
+  setTimeout(()=>{const s=document.getElementById('callStatus');if(s){s.textContent='Connected ● 00:00';s.style.color='var(--accent-green)';startCallTimer();}},2500);
+}
+let _callTimer=null,_callSeconds=0;
+function startCallTimer(){_callSeconds=0;clearInterval(_callTimer);_callTimer=setInterval(()=>{_callSeconds++;const m=String(Math.floor(_callSeconds/60)).padStart(2,'0'),s=String(_callSeconds%60).padStart(2,'0'),el=document.getElementById('callStatus');if(el)el.textContent=`Connected ● ${m}:${s}`;},1000);}
+function endCall(){clearInterval(_callTimer);const modal=document.getElementById('callModal');if(modal){modal.style.opacity='0';modal.style.transition='opacity 0.2s';setTimeout(()=>modal.remove(),200);}}
+
+document.addEventListener('DOMContentLoaded',()=>initMessages());
+</script>
+</body>
+</html>
